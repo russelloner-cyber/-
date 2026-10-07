@@ -238,21 +238,12 @@ export function updateGameCore(scene, delta, customCursors = null) {
   } else {
     chaosTimer -= delta;
     if (isBlackoutActive && blackoutOverlay && player) {
-      // FIX: Учитываем CSS-масштабирование #page-scale-wrapper
-      const wrapper = document.getElementById('page-scale-wrapper');
-      const wrapperRect = wrapper ? wrapper.getBoundingClientRect() : null;
-      const wrapperScale = wrapperRect ? (wrapperRect.width / wrapper.scrollWidth) : 1;
+      // FIX: Используем экранные координаты Phaser — getBoundingClientRect ломается на iOS Safari
+      const cam = scene.cameras.main;
+      const playerScreenX = (player.x - cam.scrollX) * cam.zoom * (scene.game.scale.displaySize.width / CONFIG.width);
+      const playerScreenY = (player.y - cam.scrollY) * cam.zoom * (scene.game.scale.displaySize.height / CONFIG.height);
 
-      const canvas = scene.game.canvas;
-      const rect = canvas.getBoundingClientRect();
-
-      const scaleX = rect.width / CONFIG.width;
-      const scaleY = rect.height / CONFIG.height;
-
-      const playerCanvasX = player.x * scaleX * wrapperScale;
-      const playerCanvasY = player.y * scaleY * wrapperScale;
-
-      blackoutOverlay.style.background = `radial-gradient(circle at ${playerCanvasX}px ${playerCanvasY}px, transparent 45px, rgba(10, 15, 20, 0.97) 85px)`;
+      blackoutOverlay.style.background = `radial-gradient(circle at ${playerScreenX}px ${playerScreenY}px, transparent 45px, rgba(10, 15, 20, 0.97) 85px)`;
     }
     if (chaosTimer <= 0) {
       chaosChanceTimer = 0; isRestingAfterAnomaly = true;
@@ -1322,6 +1313,13 @@ document.addEventListener('touchstart', (event) => {
 }, { passive: false });
 document.addEventListener('gesturestart', (event) => event.preventDefault());
 
+// FIX: Глобальный запрет touchmove — Safari не двигает экран за пальцем игрока
+document.addEventListener('touchmove', (event) => {
+  if (event.touches.length === 1) {
+    event.preventDefault();
+  }
+}, { passive: false });
+
 // Глушение Web Audio API при потере фокуса вкладки
 document.addEventListener('visibilitychange', () => {
   handleVisibilityChange(document.hidden);
@@ -1361,6 +1359,16 @@ const setupMobileKey = (elementId, imgId, activeSrc, inactiveSrc, keyCode, keyNa
     img.src = inactiveSrc;
     simulateKeyEvent('keyup', keyCode, keyName); 
   }, { passive: false });
+
+  // FIX: Защита от залипания кнопок геймпада на iOS — отжимаем при выходе пальца за пределы
+  el.addEventListener('touchmove', (e) => {
+    const touch = e.touches[0];
+    const rect = el.getBoundingClientRect();
+    if (touch.clientX < rect.left || touch.clientX > rect.right || touch.clientY < rect.top || touch.clientY > rect.bottom) {
+      img.src = inactiveSrc;
+      simulateKeyEvent('keyup', keyCode, keyName);
+    }
+  }, { passive: true });
 };
 
 setupMobileKey('m-left', 'img-left', 'knopka1mobactive.png', 'knopka1mobspoku.png', 37, 'ArrowLeft');
@@ -1548,6 +1556,10 @@ function injectMobileStyles() {
             align-items: flex-start !important;
             justify-content: flex-start !important;
             box-sizing: border-box !important;
+            /* FIX: Защита от «резинового» скролла Safari на iOS/iPadOS */
+            position: fixed !important;
+            overscroll-behavior: none !important;
+            touch-action: none !important;
         }
         #page-scale-wrapper {
             width: 100% !important;
@@ -2113,7 +2125,7 @@ if (!document.getElementById(styleId)) {
             width: 100%; background: #151d24; border: 2px solid #34495e; 
             border-radius: 6px; padding: 8px; box-sizing: border-box; font-size: 11px; 
             line-height: 1.4; margin-bottom: 8px; overflow: hidden; 
-            flex-grow: 1; flex-shrink: 1; min-height: 80px; max-height: 250px;
+            flex-shrink: 1; min-height: 80px; max-height: 250px;
             color: #fff; font-family: Roboto, sans-serif;
             overflow-y: auto !important; /* ⛔ НЕ УДАЛЯТЬ: скролл для контента табов "Играть" "О игре" "Очки" "Контакты" */
         }
@@ -2406,8 +2418,16 @@ export function showMainMenu(onStartGameCallback) {
     };
 
     startButton.onclick = () => {
-           const gamepad = document.querySelector('.mobile-gamepad');
-    if (gamepad) gamepad.classList.add('gamepad-animate');
+        // FIX: Принудительная разблокировка AudioContext для Apple (iOS/iPadOS)
+        if (window.phaserGameInstance && window.phaserGameInstance.sound && window.phaserGameInstance.sound.context) {
+            const phaserCtx = window.phaserGameInstance.sound.context;
+            if (phaserCtx.state === 'suspended') {
+                phaserCtx.resume();
+            }
+        }
+        
+        const gamepad = document.querySelector('.mobile-gamepad');
+        if (gamepad) gamepad.classList.add('gamepad-animate');
         if (cabinet) cabinet.classList.remove('arcade-cabinet-active');
         clearInterval(onlineInterval);
         
